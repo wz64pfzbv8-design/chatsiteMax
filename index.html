@@ -9,7 +9,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getDatabase, ref, push, onChildAdded } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+    import { getDatabase, ref, push, onChildAdded, onChildRemoved, get, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
     const firebaseConfig = {
       databaseURL: "https://chat-f805f-default-rtdb.firebaseio.com"
@@ -19,6 +19,7 @@
 
     let currentRoom = "";
     let myName = "";
+    const MAX_MESSAGES = 30; // 部屋に保存する最大メッセージ件数（これを超えると古い順に自動削除）
 
     // 部屋に入室する処理
     window.joinRoom = function() {
@@ -38,34 +39,64 @@
       document.getElementById('chat-screen').classList.remove('hidden');
       document.getElementById('room-title').innerText = `部屋番号: ${currentRoom}`;
 
-      // リアルタイムでメッセージを受信
       const roomRef = ref(db, 'rooms/' + currentRoom);
+
+      // リアルタイムでメッセージを受信
       onChildAdded(roomRef, (snapshot) => {
         const data = snapshot.val();
-        appendMessage(data.sender, data.text, data.sender === myName);
+        appendMessage(snapshot.key, data.sender, data.text, data.sender === myName);
+      });
+
+      // 他の端末で古いメッセージが削除されたら画面からも消す
+      onChildRemoved(roomRef, (snapshot) => {
+        const msgEl = document.getElementById(`msg-${snapshot.key}`);
+        if (msgEl) msgEl.remove();
       });
     };
 
     // メッセージ送信処理
-    window.sendMessage = function(e) {
+    window.sendMessage = async function(e) {
       e.preventDefault();
       const textInput = document.getElementById('message-input');
       const text = textInput.value.trim();
       if (!text || !currentRoom) return;
 
       const roomRef = ref(db, 'rooms/' + currentRoom);
-      push(roomRef, {
+
+      // 新しいメッセージを送信
+      await push(roomRef, {
         sender: myName,
         text: text,
         timestamp: Date.now()
       });
 
       textInput.value = '';
+
+      // 古いメッセージの件数チェックと自動削除
+      const snapshot = await get(roomRef);
+      if (snapshot.exists()) {
+        const messages = snapshot.val();
+        const keys = Object.keys(messages);
+
+        // 設定件数（30件）を超えていたら古いものを削除
+        if (keys.length > MAX_MESSAGES) {
+          const deleteCount = keys.length - MAX_MESSAGES;
+          for (let i = 0; i < deleteCount; i++) {
+            const oldKey = keys[i];
+            await remove(ref(db, `rooms/${currentRoom}/${oldKey}`));
+          }
+        }
+      }
     };
 
-    function appendMessage(sender, text, isMe) {
+    function appendMessage(key, sender, text, isMe) {
       const chatMessages = document.getElementById('chat-messages');
+      
+      // 既に表示済みの場合はスキップ
+      if (document.getElementById(`msg-${key}`)) return;
+
       const wrapper = document.createElement('div');
+      wrapper.id = `msg-${key}`;
       wrapper.className = `chat ${isMe ? 'chat-end' : 'chat-start'}`;
 
       const header = document.createElement('div');
@@ -106,7 +137,7 @@
     <!-- ヘッダー -->
     <div class="p-4 bg-primary text-primary-content font-bold flex justify-between items-center rounded-t-xl">
       <span id="room-title">部屋番号: -</span>
-      <span class="badge badge-outline text-white">接続中</span>
+      <span class="badge badge-outline text-white">自動削除ON (最大30件)</span>
     </div>
 
     <!-- メッセージ表示エリア -->
