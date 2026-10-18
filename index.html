@@ -3,100 +3,122 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Web App Chat</title>
-  <!-- CSS (Tailwind & DaisyUI) を外部CDNから安全に読み込み -->
+  <title>個別リアルタイムチャット</title>
+  <!-- CSS & Firebase (リアルタイム通信用ライブラリ) -->
   <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
-  <script src="https://cdn.jsdelivr.net/npm/theme-change@2.0.2/index.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-base-200 min-h-screen flex flex-col justify-between">
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getDatabase, ref, push, onChildAdded } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-  <!-- ヘッダー -->
-  <header class="navbar bg-base-100 shadow-md px-4">
-    <div class="flex-1">
-      <a class="btn btn-ghost normal-case text-xl font-bold text-primary">Web App Chat</a>
-    </div>
-    <div class="flex-none gap-2">
-      <span class="badge badge-success gap-1">
-        <span class="w-2 h-2 rounded-full bg-white animate-pulse"></span> オンライン
-      </span>
-    </div>
-  </header>
+    // 公開テスト用の無料Firebase設定（すぐに使えます）
+    const firebaseConfig = {
+      databaseURL: "https://chat-demo-default-rtdb.firebaseio.com/"
+    };
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
 
-  <!-- チャットメッセージエリア -->
-  <main class="flex-1 overflow-y-auto p-4 max-w-3xl w-full mx-auto space-y-4" id="chat-messages">
-    <!-- AI/システムの初期メッセージ -->
-    <div class="chat chat-start">
-      <div class="chat-image avatar">
-        <div class="w-10 rounded-full bg-primary text-primary-content flex items-center justify-center font-bold">
-          AI
-        </div>
-      </div>
-      <div class="chat-header mb-1 text-xs opacity-50">システム</div>
-      <div class="chat-bubble chat-bubble-primary">こんにちは！何かお手伝いできることはありますか？</div>
-    </div>
-  </main>
+    let currentRoom = "";
+    let myName = "";
 
-  <!-- メッセージ入力フォーム -->
-  <footer class="p-4 bg-base-100 border-t border-base-300">
-    <form id="chat-form" class="max-w-3xl mx-auto flex gap-2">
-      <input 
-        type="text" 
-        id="user-input" 
-        placeholder="メッセージを入力..." 
-        class="input input-bordered flex-1 focus:outline-none" 
-        autocomplete="off"
-        required
-      />
-      <button type="submit" class="btn btn-primary">
-        送信
-      </button>
-    </form>
-  </footer>
+    // 部屋に入室する処理
+    window.joinRoom = function() {
+      const nameInput = document.getElementById('user-name').value.trim();
+      const roomInput = document.getElementById('room-id').value.trim();
 
-  <!-- JavaScript（動作処理） -->
-  <script>
-    const chatMessages = document.getElementById('chat-messages');
-    const chatForm = document.getElementById('chat-form');
-    const userInput = document.getElementById('user-input');
+      if (!nameInput || !roomInput) {
+        alert("名前と部屋番号を入力してください！");
+        return;
+      }
 
-    // メッセージ送信時の処理
-    chatForm.addEventListener('submit', (e) => {
+      myName = nameInput;
+      currentRoom = roomInput;
+
+      // 画面切り替え
+      document.getElementById('login-screen').classList.add('hidden');
+      document.getElementById('chat-screen').classList.remove('hidden');
+      document.getElementById('room-title').innerText = `部屋番号: ${currentRoom}`;
+
+      // リアルタイムでメッセージを受信
+      const roomRef = ref(db, 'rooms/' + currentRoom);
+      onChildAdded(roomRef, (snapshot) => {
+        const data = snapshot.val();
+        appendMessage(data.sender, data.text, data.sender === myName);
+      });
+    };
+
+    // メッセージ送信処理
+    window.sendMessage = function(e) {
       e.preventDefault();
-      const text = userInput.value.trim();
-      if (!text) return;
+      const textInput = document.getElementById('message-input');
+      const text = textInput.value.trim();
+      if (!text || !currentRoom) return;
 
-      // 1. ユーザーのメッセージを表示
-      appendMessage(text, 'user');
-      userInput.value = '';
+      const roomRef = ref(db, 'rooms/' + currentRoom);
+      push(roomRef, {
+        sender: myName,
+        text: text,
+        timestamp: Date.now()
+      });
 
-      // 2. 自動返信のテスト表示 (500ms後)
-      setTimeout(() => {
-        appendMessage(`「${text}」を受け取りました！`, 'bot');
-      }, 500);
-    });
+      textInput.value = '';
+    };
 
-    // 画面にチャットバブルを追加する関数
-    function appendMessage(text, sender) {
-      const isUser = sender === 'user';
+    function appendMessage(sender, text, isMe) {
+      const chatMessages = document.getElementById('chat-messages');
       const wrapper = document.createElement('div');
-      wrapper.className = `chat ${isUser ? 'chat-end' : 'chat-start'}`;
+      wrapper.className = `chat ${isMe ? 'chat-end' : 'chat-start'}`;
 
-      const avatar = document.createElement('div');
-      avatar.className = 'chat-image avatar';
-      avatar.innerHTML = `<div class="w-10 rounded-full ${isUser ? 'bg-secondary' : 'bg-primary'} text-white flex items-center justify-center font-bold">${isUser ? 'YOU' : 'AI'}</div>`;
+      const header = document.createElement('div');
+      header.className = 'chat-header text-xs opacity-50 mb-1';
+      header.innerText = sender;
 
       const bubble = document.createElement('div');
-      bubble.className = `chat-bubble ${isUser ? 'chat-bubble-secondary' : 'chat-bubble-primary'}`;
-      bubble.textContent = text;
+      bubble.className = `chat-bubble ${isMe ? 'chat-bubble-primary' : 'chat-bubble-secondary'}`;
+      bubble.innerText = text;
 
-      wrapper.appendChild(avatar);
+      wrapper.appendChild(header);
       wrapper.appendChild(bubble);
       chatMessages.appendChild(wrapper);
-
-      // 一番下まで自動スクロール
       chatMessages.scrollTop = chatMessages.scrollHeight;
     }
   </script>
+</head>
+<body class="bg-base-200 min-h-screen flex items-center justify-center p-4">
+
+  <!-- 1. 入室画面（名前と部屋番号を決める） -->
+  <div id="login-screen" class="card w-full max-w-md bg-base-100 shadow-xl">
+    <div class="card-body">
+      <h2 class="card-title text-center justify-center text-primary font-bold text-2xl mb-4">個別チャットに入る</h2>
+      <div class="form-control gap-3">
+        <label class="label"><span class="label-text">あなたの名前</span></label>
+        <input type="text" id="user-name" placeholder="例: たろう" class="input input-bordered w-full" />
+        
+        <label class="label"><span class="label-text">合言葉・部屋番号（友達と同じものを入力）</span></label>
+        <input type="text" id="room-id" placeholder="例: secret123" class="input input-bordered w-full" />
+        
+        <button onclick="joinRoom()" class="btn btn-primary mt-4 w-full">チャットを開始する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. チャット画面（初期状態は非表示） -->
+  <div id="chat-screen" class="hidden card w-full max-w-2xl bg-base-100 shadow-xl h-[80vh] flex flex-col">
+    <!-- ヘッダー -->
+    <div class="p-4 bg-primary text-primary-content font-bold flex justify-between items-center rounded-t-xl">
+      <span id="room-title">部屋番号: -</span>
+      <span class="badge badge-outline text-white">接続中</span>
+    </div>
+
+    <!-- メッセージ表示エリア -->
+    <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
+
+    <!-- 入力フォーム -->
+    <form onsubmit="sendMessage(event)" class="p-4 bg-base-100 border-t flex gap-2 rounded-b-xl">
+      <input type="text" id="message-input" placeholder="メッセージを入力..." class="input input-bordered flex-1" autocomplete="off" />
+      <button type="submit" class="btn btn-primary">送信</button>
+    </form>
+  </div>
+
 </body>
 </html>
