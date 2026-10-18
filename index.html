@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>個別リアルタイムチャット</title>
-  <!-- CSS & Firebase (リアルタイム通信用ライブラリ) -->
+  <title>個別リアルタイムチャット（写真送信対応）</title>
+  <!-- CSS & Firebase -->
   <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script type="module">
@@ -19,9 +19,8 @@
 
     let currentRoom = "";
     let myName = "";
-    const MAX_MESSAGES = 30; // 部屋に保存する最大メッセージ件数（これを超えると古い順に自動削除）
+    const MAX_MESSAGES = 30;
 
-    // 部屋に入室する処理
     window.joinRoom = function() {
       const nameInput = document.getElementById('user-name').value.trim();
       const roomInput = document.getElementById('room-id').value.trim();
@@ -34,65 +33,130 @@
       myName = nameInput;
       currentRoom = roomInput;
 
-      // 画面切り替え
       document.getElementById('login-screen').classList.add('hidden');
       document.getElementById('chat-screen').classList.remove('hidden');
       document.getElementById('room-title').innerText = `部屋番号: ${currentRoom}`;
 
       const roomRef = ref(db, 'rooms/' + currentRoom);
 
-      // リアルタイムでメッセージを受信
       onChildAdded(roomRef, (snapshot) => {
         const data = snapshot.val();
-        appendMessage(snapshot.key, data.sender, data.text, data.sender === myName);
+        appendMessage(snapshot.key, data.sender, data.text, data.image, data.sender === myName);
       });
 
-      // 他の端末で古いメッセージが削除されたら画面からも消す
       onChildRemoved(roomRef, (snapshot) => {
         const msgEl = document.getElementById(`msg-${snapshot.key}`);
         if (msgEl) msgEl.remove();
       });
     };
 
-    // メッセージ送信処理
+    // 画像選択時にプレビュー表示
+    window.previewImage = function(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const previewArea = document.getElementById('image-preview-area');
+        const previewImg = document.getElementById('preview-img');
+        previewImg.src = e.target.result;
+        previewArea.classList.remove('hidden');
+      };
+      reader.readAsDataURL(file);
+    };
+
+    // プレビューキャンセル
+    window.cancelImage = function() {
+      document.getElementById('image-input').value = "";
+      document.getElementById('image-preview-area').classList.add('hidden');
+    };
+
+    // メッセージ（テキストまたは画像）送信処理
     window.sendMessage = async function(e) {
       e.preventDefault();
       const textInput = document.getElementById('message-input');
+      const imageInput = document.getElementById('image-input');
       const text = textInput.value.trim();
-      if (!text || !currentRoom) return;
+      const file = imageInput.files[0];
+
+      if (!text && !file) return;
+      if (!currentRoom) return;
+
+      let imageBase64 = null;
+
+      if (file) {
+        // 画像を圧縮・変換してBase64にする
+        imageBase64 = await resizeAndConvertImage(file);
+      }
 
       const roomRef = ref(db, 'rooms/' + currentRoom);
 
-      // 新しいメッセージを送信
       await push(roomRef, {
         sender: myName,
         text: text,
+        image: imageBase64,
         timestamp: Date.now()
       });
 
+      // フォームをリセット
       textInput.value = '';
+      cancelImage();
 
-      // 古いメッセージの件数チェックと自動削除
+      // 自動削除処理
       const snapshot = await get(roomRef);
       if (snapshot.exists()) {
         const messages = snapshot.val();
         const keys = Object.keys(messages);
-
-        // 設定件数（30件）を超えていたら古いものを削除
         if (keys.length > MAX_MESSAGES) {
           const deleteCount = keys.length - MAX_MESSAGES;
           for (let i = 0; i < deleteCount; i++) {
-            const oldKey = keys[i];
-            await remove(ref(db, `rooms/${currentRoom}/${oldKey}`));
+            await remove(ref(db, `rooms/${currentRoom}/${keys[i]}`));
           }
         }
       }
     };
 
-    function appendMessage(key, sender, text, isMe) {
+    // 画像を縮小して通信量を抑えるヘルパー関数
+    function resizeAndConvertImage(file) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const img = new Image();
+          img.onload = function() {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 800; // 最大横幅
+            const MAX_HEIGHT = 800; // 最大縦幅
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+              if (width > MAX_WIDTH) {
+                height *= MAX_WIDTH / width;
+                width = MAX_WIDTH;
+              }
+            } else {
+              if (height > MAX_HEIGHT) {
+                width *= MAX_HEIGHT / height;
+                height = MAX_HEIGHT;
+              }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // JPEG形式で圧縮（画質0.7）
+            resolve(canvas.toDataURL('image/jpeg', 0.7));
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function appendMessage(key, sender, text, image, isMe) {
       const chatMessages = document.getElementById('chat-messages');
-      
-      // 既に表示済みの場合はスキップ
       if (document.getElementById(`msg-${key}`)) return;
 
       const wrapper = document.createElement('div');
@@ -104,8 +168,21 @@
       header.innerText = sender;
 
       const bubble = document.createElement('div');
-      bubble.className = `chat-bubble ${isMe ? 'chat-bubble-primary' : 'chat-bubble-secondary'}`;
-      bubble.innerText = text;
+      bubble.className = `chat-bubble ${isMe ? 'chat-bubble-primary' : 'chat-bubble-secondary'} flex flex-col gap-2`;
+
+      if (text) {
+        const textEl = document.createElement('span');
+        textEl.textContent = text;
+        bubble.appendChild(textEl);
+      }
+
+      if (image) {
+        const imgEl = document.createElement('img');
+        imgEl.src = image;
+        imgEl.className = 'max-w-xs rounded-lg shadow-md cursor-pointer';
+        imgEl.onclick = () => window.open(image); // クリックで拡大表示
+        bubble.appendChild(imgEl);
+      }
 
       wrapper.appendChild(header);
       wrapper.appendChild(bubble);
@@ -116,7 +193,7 @@
 </head>
 <body class="bg-base-200 min-h-screen flex items-center justify-center p-4">
 
-  <!-- 1. 入室画面 -->
+  <!-- 入室画面 -->
   <div id="login-screen" class="card w-full max-w-md bg-base-100 shadow-xl">
     <div class="card-body">
       <h2 class="card-title text-center justify-center text-primary font-bold text-2xl mb-4">個別チャットに入る</h2>
@@ -132,20 +209,31 @@
     </div>
   </div>
 
-  <!-- 2. チャット画面 -->
-  <div id="chat-screen" class="hidden card w-full max-w-2xl bg-base-100 shadow-xl h-[80vh] flex flex-col">
-    <!-- ヘッダー -->
+  <!-- チャット画面 -->
+  <div id="chat-screen" class="hidden card w-full max-w-2xl bg-base-100 shadow-xl h-[85vh] flex flex-col">
     <div class="p-4 bg-primary text-primary-content font-bold flex justify-between items-center rounded-t-xl">
       <span id="room-title">部屋番号: -</span>
-      <span class="badge badge-outline text-white">自動削除ON (最大30件)</span>
+      <span class="badge badge-outline text-white">写真・自動削除対応</span>
     </div>
 
-    <!-- メッセージ表示エリア -->
     <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
 
+    <!-- 画像プレビューエリア -->
+    <div id="image-preview-area" class="hidden p-2 bg-base-200 border-t flex items-center gap-2">
+      <img id="preview-img" class="w-16 h-16 object-cover rounded-lg border" />
+      <span class="text-xs text-gray-500 flex-1">送信する画像</span>
+      <button type="button" onclick="cancelImage()" class="btn btn-sm btn-circle btn-ghost">✕</button>
+    </div>
+
     <!-- 入力フォーム -->
-    <form onsubmit="sendMessage(event)" class="p-4 bg-base-100 border-t flex gap-2 rounded-b-xl">
-      <input type="text" id="message-input" placeholder="メッセージを入力..." class="input input-bordered flex-1" autocomplete="off" />
+    <form onsubmit="sendMessage(event)" class="p-3 bg-base-100 border-t flex items-center gap-2 rounded-b-xl">
+      <!-- 画像ファイル選択ボタン -->
+      <label class="btn btn-ghost btn-circle cursor-pointer">
+        📷
+        <input type="file" id="image-input" accept="image/*" class="hidden" onchange="previewImage(event)" />
+      </label>
+
+      <input type="text" id="message-input" placeholder="メッセージまたは写真を入力..." class="input input-bordered flex-1" autocomplete="off" />
       <button type="submit" class="btn btn-primary">送信</button>
     </form>
   </div>
