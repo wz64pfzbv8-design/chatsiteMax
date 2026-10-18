@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>個別リアルタイムチャット（写真送信対応）</title>
+  <title>高機能リアルタイムチャット</title>
   <!-- CSS & Firebase -->
   <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
   <script src="https://cdn.tailwindcss.com"></script>
@@ -19,7 +19,16 @@
 
     let currentRoom = "";
     let myName = "";
-    const MAX_MESSAGES = 30;
+    let myAvatar = "🐱";
+    let mutedUsers = JSON.parse(localStorage.getItem('muted_users') || "[]");
+    const MAX_MESSAGES = 40;
+
+    // アイコン選択肢
+    window.selectAvatar = function(emoji, element) {
+      myAvatar = emoji;
+      document.querySelectorAll('.avatar-option').forEach(el => el.classList.remove('border-primary', 'border-4'));
+      element.classList.add('border-primary', 'border-4');
+    };
 
     window.joinRoom = function() {
       const nameInput = document.getElementById('user-name').value.trim();
@@ -41,7 +50,11 @@
 
       onChildAdded(roomRef, (snapshot) => {
         const data = snapshot.val();
-        appendMessage(snapshot.key, data.sender, data.text, data.image, data.sender === myName);
+        // DM宛先指定がある場合、自分宛てか自分が送ったものでなければ表示しない
+        if (data.target && data.target !== myName && data.sender !== myName) {
+          return;
+        }
+        appendMessage(snapshot.key, data.sender, data.avatar || "👤", data.text, data.image, data.target, data.sender === myName);
       });
 
       onChildRemoved(roomRef, (snapshot) => {
@@ -50,73 +63,67 @@
       });
     };
 
-    // 画像選択時にプレビュー表示
     window.previewImage = function(event) {
       const file = event.target.files[0];
       if (!file) return;
-
       const reader = new FileReader();
       reader.onload = function(e) {
-        const previewArea = document.getElementById('image-preview-area');
-        const previewImg = document.getElementById('preview-img');
-        previewImg.src = e.target.result;
-        previewArea.classList.remove('hidden');
+        document.getElementById('preview-img').src = e.target.result;
+        document.getElementById('image-preview-area').classList.remove('hidden');
       };
       reader.readAsDataURL(file);
     };
 
-    // プレビューキャンセル
     window.cancelImage = function() {
       document.getElementById('image-input').value = "";
       document.getElementById('image-preview-area').classList.add('hidden');
     };
 
-    // メッセージ（テキストまたは画像）送信処理
+    // メッセージ送信
     window.sendMessage = async function(e) {
       e.preventDefault();
       const textInput = document.getElementById('message-input');
       const imageInput = document.getElementById('image-input');
+      const targetInput = document.getElementById('dm-target');
       const text = textInput.value.trim();
       const file = imageInput.files[0];
+      const target = targetInput.value.trim(); // 特定の宛先（空なら全体）
 
       if (!text && !file) return;
       if (!currentRoom) return;
 
       let imageBase64 = null;
-
       if (file) {
-        // 画像を圧縮・変換してBase64にする
         imageBase64 = await resizeAndConvertImage(file);
       }
 
       const roomRef = ref(db, 'rooms/' + currentRoom);
-
       await push(roomRef, {
         sender: myName,
+        avatar: myAvatar,
         text: text,
         image: imageBase64,
+        target: target ? target : null,
         timestamp: Date.now()
       });
 
-      // フォームをリセット
       textInput.value = '';
+      targetInput.value = '';
       cancelImage();
 
-      // 自動削除処理
+      // 自動削除
       const snapshot = await get(roomRef);
       if (snapshot.exists()) {
         const messages = snapshot.val();
         const keys = Object.keys(messages);
         if (keys.length > MAX_MESSAGES) {
-          const deleteCount = keys.length - MAX_MESSAGES;
-          for (let i = 0; i < deleteCount; i++) {
+          for (let i = 0; i < keys.length - MAX_MESSAGES; i++) {
             await remove(ref(db, `rooms/${currentRoom}/${keys[i]}`));
           }
         }
       }
     };
 
-    // 画像を縮小して通信量を抑えるヘルパー関数
     function resizeAndConvertImage(file) {
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -124,29 +131,11 @@
           const img = new Image();
           img.onload = function() {
             const canvas = document.createElement('canvas');
-            const MAX_WIDTH = 800; // 最大横幅
-            const MAX_HEIGHT = 800; // 最大縦幅
-            let width = img.width;
-            let height = img.height;
-
-            if (width > height) {
-              if (width > MAX_WIDTH) {
-                height *= MAX_WIDTH / width;
-                width = MAX_WIDTH;
-              }
-            } else {
-              if (height > MAX_HEIGHT) {
-                width *= MAX_HEIGHT / height;
-                height = MAX_HEIGHT;
-              }
-            }
-
-            canvas.width = width;
-            canvas.height = height;
+            let width = img.width, height = img.height;
+            if (width > 800) { height *= 800 / width; width = 800; }
+            canvas.width = width; canvas.height = height;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, width, height);
-
-            // JPEG形式で圧縮（画質0.7）
             resolve(canvas.toDataURL('image/jpeg', 0.7));
           };
           img.src = e.target.result;
@@ -155,7 +144,30 @@
       });
     }
 
-    function appendMessage(key, sender, text, image, isMe) {
+    // ユーザーをミュートする機能
+    window.toggleMute = function(username) {
+      if (mutedUsers.includes(username)) {
+        mutedUsers = mutedUsers.filter(u => u !== username);
+        alert(`${username} のミュートを解除しました`);
+      } else {
+        mutedUsers.push(username);
+        alert(`${username} をミュートしました（この人の発言は非表示になります）`);
+      }
+      localStorage.setItem('muted_users', JSON.stringify(mutedUsers));
+      location.reload(); // 反映のためリロード
+    };
+
+    // 特定の相手にDMを送るために入力欄に名前をセットする
+    window.setDmTarget = function(username) {
+      if (username === myName) return;
+      document.getElementById('dm-target').value = username;
+      alert(`${username} への個別送信（DM）モードに切り替えました。`);
+    };
+
+    function appendMessage(key, sender, avatar, text, image, target, isMe) {
+      // ミュートされているユーザーのメッセージは表示しない
+      if (mutedUsers.includes(sender)) return;
+
       const chatMessages = document.getElementById('chat-messages');
       if (document.getElementById(`msg-${key}`)) return;
 
@@ -163,10 +175,32 @@
       wrapper.id = `msg-${key}`;
       wrapper.className = `chat ${isMe ? 'chat-end' : 'chat-start'}`;
 
-      const header = document.createElement('div');
-      header.className = 'chat-header text-xs opacity-50 mb-1';
-      header.innerText = sender;
+      // アバター部分
+      const avatarDiv = document.createElement('div');
+      avatarDiv.className = 'chat-image avatar placeholder';
+      avatarDiv.innerHTML = `<div class="bg-neutral text-neutral-content rounded-full w-10 text-lg flex items-center justify-center">${avatar}</div>`;
 
+      // ヘッダー（名前 ＆ 操作ボタン）
+      const header = document.createElement('div');
+      header.className = 'chat-header text-xs opacity-70 mb-1 flex items-center gap-2';
+      
+      let targetTag = target ? `<span class="badge badge-xs badge-accent">🔒 ${target}へ</span>` : '';
+      header.innerHTML = `<span>${sender}</span> ${targetTag}`;
+
+      // 自分以外の場合、クリックしてDMやミュートができるメニューを追加
+      if (!isMe) {
+        const menuBtn = document.createElement('button');
+        menuBtn.className = 'text-[10px] underline opacity-50 hover:opacity-100 ml-1';
+        menuBtn.innerText = '⚙️メニュー';
+        menuBtn.onclick = () => {
+          const action = prompt(`${sender} さんに対する操作:\n1: 個別送信(DM)する\n2: ミュート(非表示)にする`, "1");
+          if (action === "1") setDmTarget(sender);
+          if (action === "2") toggleMute(sender);
+        };
+        header.appendChild(menuBtn);
+      }
+
+      // バブル部分
       const bubble = document.createElement('div');
       bubble.className = `chat-bubble ${isMe ? 'chat-bubble-primary' : 'chat-bubble-secondary'} flex flex-col gap-2`;
 
@@ -180,10 +214,11 @@
         const imgEl = document.createElement('img');
         imgEl.src = image;
         imgEl.className = 'max-w-xs rounded-lg shadow-md cursor-pointer';
-        imgEl.onclick = () => window.open(image); // クリックで拡大表示
+        imgEl.onclick = () => window.open(image);
         bubble.appendChild(imgEl);
       }
 
+      wrapper.appendChild(avatarDiv);
       wrapper.appendChild(header);
       wrapper.appendChild(bubble);
       chatMessages.appendChild(wrapper);
@@ -196,12 +231,21 @@
   <!-- 入室画面 -->
   <div id="login-screen" class="card w-full max-w-md bg-base-100 shadow-xl">
     <div class="card-body">
-      <h2 class="card-title text-center justify-center text-primary font-bold text-2xl mb-4">個別チャットに入る</h2>
+      <h2 class="card-title text-center justify-center text-primary font-bold text-2xl mb-4">チャットに参加</h2>
       <div class="form-control gap-3">
         <label class="label"><span class="label-text">あなたの名前</span></label>
         <input type="text" id="user-name" placeholder="例: たろう" class="input input-bordered w-full" />
         
-        <label class="label"><span class="label-text">合言葉・部屋番号（友達と同じものを入力）</span></label>
+        <label class="label"><span class="label-text">アイコンを選択</span></label>
+        <div class="flex gap-2 justify-center my-2 text-2xl">
+          <span onclick="selectAvatar('🐱', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300 border-primary border-4">🐱</span>
+          <span onclick="selectAvatar('🐶', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🐶</span>
+          <span onclick="selectAvatar('🦊', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🦊</span>
+          <span onclick="selectAvatar('🐼', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🐼</span>
+          <span onclick="selectAvatar('🤖', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🤖</span>
+        </div>
+
+        <label class="label"><span class="label-text">部屋番号（合言葉）</span></label>
         <input type="text" id="room-id" placeholder="例: secret123" class="input input-bordered w-full" />
         
         <button onclick="joinRoom()" class="btn btn-primary mt-4 w-full">チャットを開始する</button>
@@ -210,13 +254,13 @@
   </div>
 
   <!-- チャット画面 -->
-  <div id="chat-screen" class="hidden card w-full max-w-2xl bg-base-100 shadow-xl h-[85vh] flex flex-col">
+  <div id="chat-screen" class="hidden card w-full max-w-2xl bg-base-100 shadow-xl h-[88vh] flex flex-col">
     <div class="p-4 bg-primary text-primary-content font-bold flex justify-between items-center rounded-t-xl">
       <span id="room-title">部屋番号: -</span>
-      <span class="badge badge-outline text-white">写真・自動削除対応</span>
+      <span class="badge badge-outline text-white">高機能モード</span>
     </div>
 
-    <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
+    <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
 
     <!-- 画像プレビューエリア -->
     <div id="image-preview-area" class="hidden p-2 bg-base-200 border-t flex items-center gap-2">
@@ -225,15 +269,21 @@
       <button type="button" onclick="cancelImage()" class="btn btn-sm btn-circle btn-ghost">✕</button>
     </div>
 
+    <!-- 宛先指定バー（DM用） -->
+    <div class="px-3 pt-2 bg-base-100 flex items-center gap-2 text-xs text-gray-500 border-t">
+      <span>宛先:</span>
+      <input type="text" id="dm-target" placeholder="全体送信（空欄なら全員に見えます）" class="input input-xs input-bordered flex-1" readonly />
+      <button onclick="document.getElementById('dm-target').value=''" class="btn btn-xs btn-ghost">全体に戻す</button>
+    </div>
+
     <!-- 入力フォーム -->
-    <form onsubmit="sendMessage(event)" class="p-3 bg-base-100 border-t flex items-center gap-2 rounded-b-xl">
-      <!-- 画像ファイル選択ボタン -->
+    <form onsubmit="sendMessage(event)" class="p-3 bg-base-100 flex items-center gap-2 rounded-b-xl">
       <label class="btn btn-ghost btn-circle cursor-pointer">
         📷
         <input type="file" id="image-input" accept="image/*" class="hidden" onchange="previewImage(event)" />
       </label>
 
-      <input type="text" id="message-input" placeholder="メッセージまたは写真を入力..." class="input input-bordered flex-1" autocomplete="off" />
+      <input type="text" id="message-input" placeholder="メッセージを入力..." class="input input-bordered flex-1" autocomplete="off" />
       <button type="submit" class="btn btn-primary">送信</button>
     </form>
   </div>
