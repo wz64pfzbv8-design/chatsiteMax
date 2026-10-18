@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>高機能リアルタイムチャット</title>
+  <title>高機能リアルタイムチャット（完全版）</title>
   <!-- CSS & Firebase -->
   <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
   <script src="https://cdn.tailwindcss.com"></script>
@@ -19,15 +19,41 @@
 
     let currentRoom = "";
     let myName = "";
-    let myAvatar = "🐱";
+    let myAvatar = "🐱"; // 初期アイコン
     let mutedUsers = JSON.parse(localStorage.getItem('muted_users') || "[]");
     const MAX_MESSAGES = 40;
 
-    // アイコン選択肢
+    // 絵文字アイコン選択
     window.selectAvatar = function(emoji, element) {
       myAvatar = emoji;
       document.querySelectorAll('.avatar-option').forEach(el => el.classList.remove('border-primary', 'border-4'));
       element.classList.add('border-primary', 'border-4');
+      document.getElementById('custom-avatar-preview').src = "";
+    };
+
+    // 自分の写真（画像ファイル）をアイコンに設定
+    window.selectCustomAvatar = function(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+          const canvas = document.createElement('canvas');
+          canvas.width = 100;
+          canvas.height = 100;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, 100, 100);
+          myAvatar = canvas.toDataURL('image/jpeg', 0.7);
+
+          // プレビュー表示
+          document.getElementById('custom-avatar-preview').src = myAvatar;
+          document.querySelectorAll('.avatar-option').forEach(el => el.classList.remove('border-primary', 'border-4'));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
     };
 
     window.joinRoom = function() {
@@ -50,7 +76,6 @@
 
       onChildAdded(roomRef, (snapshot) => {
         const data = snapshot.val();
-        // DM宛先指定がある場合、自分宛てか自分が送ったものでなければ表示しない
         if (data.target && data.target !== myName && data.sender !== myName) {
           return;
         }
@@ -79,7 +104,6 @@
       document.getElementById('image-preview-area').classList.add('hidden');
     };
 
-    // メッセージ送信
     window.sendMessage = async function(e) {
       e.preventDefault();
       const textInput = document.getElementById('message-input');
@@ -87,7 +111,7 @@
       const targetInput = document.getElementById('dm-target');
       const text = textInput.value.trim();
       const file = imageInput.files[0];
-      const target = targetInput.value.trim(); // 特定の宛先（空なら全体）
+      const target = targetInput.value.trim();
 
       if (!text && !file) return;
       if (!currentRoom) return;
@@ -111,7 +135,6 @@
       targetInput.value = '';
       cancelImage();
 
-      // 自動削除
       const snapshot = await get(roomRef);
       if (snapshot.exists()) {
         const messages = snapshot.val();
@@ -144,20 +167,36 @@
       });
     }
 
-    // ユーザーをミュートする機能
+    // ミュート追加・解除
     window.toggleMute = function(username) {
       if (mutedUsers.includes(username)) {
         mutedUsers = mutedUsers.filter(u => u !== username);
         alert(`${username} のミュートを解除しました`);
       } else {
         mutedUsers.push(username);
-        alert(`${username} をミュートしました（この人の発言は非表示になります）`);
+        alert(`${username} をミュートしました`);
       }
       localStorage.setItem('muted_users', JSON.stringify(mutedUsers));
-      location.reload(); // 反映のためリロード
+      location.reload();
     };
 
-    // 特定の相手にDMを送るために入力欄に名前をセットする
+    // ミュート一覧モーダルを開く
+    window.openMuteModal = function() {
+      const listContainer = document.getElementById('mute-list-container');
+      listContainer.innerHTML = "";
+      if (mutedUsers.length === 0) {
+        listContainer.innerHTML = "<p class='text-gray-400 text-center'>ミュートしているユーザーはありません</p>";
+      } else {
+        mutedUsers.forEach(user => {
+          const item = document.createElement('div');
+          item.className = "flex justify-between items-center bg-base-200 p-2 rounded-lg";
+          item.innerHTML = `<span>${user}</span> <button onclick="toggleMute('${user}')" class="btn btn-xs btn-error">解除する</button>`;
+          listContainer.appendChild(item);
+        });
+      }
+      document.getElementById('mute-modal').showModal();
+    };
+
     window.setDmTarget = function(username) {
       if (username === myName) return;
       document.getElementById('dm-target').value = username;
@@ -165,7 +204,6 @@
     };
 
     function appendMessage(key, sender, avatar, text, image, target, isMe) {
-      // ミュートされているユーザーのメッセージは表示しない
       if (mutedUsers.includes(sender)) return;
 
       const chatMessages = document.getElementById('chat-messages');
@@ -175,19 +213,20 @@
       wrapper.id = `msg-${key}`;
       wrapper.className = `chat ${isMe ? 'chat-end' : 'chat-start'}`;
 
-      // アバター部分
       const avatarDiv = document.createElement('div');
       avatarDiv.className = 'chat-image avatar placeholder';
-      avatarDiv.innerHTML = `<div class="bg-neutral text-neutral-content rounded-full w-10 text-lg flex items-center justify-center">${avatar}</div>`;
+      
+      if (avatar.startsWith('data:image')) {
+        avatarDiv.innerHTML = `<div class="w-10 rounded-full"><img src="${avatar}" /></div>`;
+      } else {
+        avatarDiv.innerHTML = `<div class="bg-neutral text-neutral-content rounded-full w-10 text-lg flex items-center justify-center">${avatar}</div>`;
+      }
 
-      // ヘッダー（名前 ＆ 操作ボタン）
       const header = document.createElement('div');
       header.className = 'chat-header text-xs opacity-70 mb-1 flex items-center gap-2';
-      
       let targetTag = target ? `<span class="badge badge-xs badge-accent">🔒 ${target}へ</span>` : '';
       header.innerHTML = `<span>${sender}</span> ${targetTag}`;
 
-      // 自分以外の場合、クリックしてDMやミュートができるメニューを追加
       if (!isMe) {
         const menuBtn = document.createElement('button');
         menuBtn.className = 'text-[10px] underline opacity-50 hover:opacity-100 ml-1';
@@ -200,7 +239,6 @@
         header.appendChild(menuBtn);
       }
 
-      // バブル部分
       const bubble = document.createElement('div');
       bubble.className = `chat-bubble ${isMe ? 'chat-bubble-primary' : 'chat-bubble-secondary'} flex flex-col gap-2`;
 
@@ -236,13 +274,23 @@
         <label class="label"><span class="label-text">あなたの名前</span></label>
         <input type="text" id="user-name" placeholder="例: たろう" class="input input-bordered w-full" />
         
-        <label class="label"><span class="label-text">アイコンを選択</span></label>
-        <div class="flex gap-2 justify-center my-2 text-2xl">
-          <span onclick="selectAvatar('🐱', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300 border-primary border-4">🐱</span>
-          <span onclick="selectAvatar('🐶', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🐶</span>
-          <span onclick="selectAvatar('🦊', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🦊</span>
-          <span onclick="selectAvatar('🐼', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🐼</span>
-          <span onclick="selectAvatar('🤖', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🤖</span>
+        <label class="label"><span class="label-text">アイコンを選択（絵文字 or 写真）</span></label>
+        <div class="flex items-center gap-3">
+          <div class="flex gap-1 text-xl">
+            <span onclick="selectAvatar('🐱', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300 border-primary border-4">🐱</span>
+            <span onclick="selectAvatar('🐶', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🐶</span>
+            <span onclick="selectAvatar('🦊', this)" class="avatar-option cursor-pointer p-2 rounded-xl border border-base-300">🦊</span>
+          </div>
+          <!-- 写真アップロード用 -->
+          <label class="btn btn-sm btn-outline btn-primary cursor-pointer gap-1">
+            📷 写真を使う
+            <input type="file" accept="image/*" class="hidden" onchange="selectCustomAvatar(event)" />
+          </label>
+        </div>
+        <!-- カスタムアバタープレビュー -->
+        <div class="flex items-center gap-2">
+          <img id="custom-avatar-preview" class="w-10 h-10 rounded-full object-cover border" />
+          <span class="text-xs text-gray-400">（写真を選んだ場合はここに反映されます）</span>
         </div>
 
         <label class="label"><span class="label-text">部屋番号（合言葉）</span></label>
@@ -257,7 +305,9 @@
   <div id="chat-screen" class="hidden card w-full max-w-2xl bg-base-100 shadow-xl h-[88vh] flex flex-col">
     <div class="p-4 bg-primary text-primary-content font-bold flex justify-between items-center rounded-t-xl">
       <span id="room-title">部屋番号: -</span>
-      <span class="badge badge-outline text-white">高機能モード</span>
+      <div class="flex gap-2">
+        <button onclick="openMuteModal()" class="btn btn-xs btn-outline text-white">ミュート一覧</button>
+      </div>
     </div>
 
     <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
@@ -287,6 +337,21 @@
       <button type="submit" class="btn btn-primary">送信</button>
     </form>
   </div>
+
+  <!-- ミュート一覧モーダル -->
+  <dialog id="mute-modal" class="modal">
+    <div class="modal-box">
+      <h3 class="font-bold text-lg mb-4">ミュートしているユーザー一覧</h3>
+      <div id="mute-list-container" class="space-y-2 mb-4">
+        <!-- JSでここにリストが挿入されます -->
+      </div>
+      <div class="modal-action">
+        <form method="dialog">
+          <button class="btn">閉じる</button>
+        </form>
+      </div>
+    </div>
+  </dialog>
 
 </body>
 </html>
